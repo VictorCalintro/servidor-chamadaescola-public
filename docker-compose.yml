@@ -1,0 +1,27 @@
+services:
+  infancia-feliz:
+    build: .
+    container_name: infancia-feliz
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"
+    volumes:
+      - sqlite-data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${PORT:-3000}/ping || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  sqlite-data:

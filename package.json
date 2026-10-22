@@ -1,0 +1,21 @@
+{
+  "name": "infancia-feliz-servidor",
+  "version": "2.0.0",
+  "description": "Sistema web de gerenciamento de alunos por turma com SQLite",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "check:server": "node --check server.js",
+    "check:html": "node scripts/check-html.js",
+    "check": "npm run check:server && npm run check:html"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "sqlite3": "^6.0.1",
+    "ws": "^8.20.1"
+  }
+}
