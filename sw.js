@@ -1,4 +1,4 @@
-const CACHE = 'infancia-feliz-v32';
+const CACHE = 'infancia-feliz-v18';
 const STATIC = ['/', '/manifest.json', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', (event) => {

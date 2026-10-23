@@ -2063,6 +2063,67 @@ let reloadServidorTimer=null;
 let atualizacaoServidorTimer=null;
 let atualizacaoServidorAtiva=false;
 let ultimaGravacaoLocal=0;
+let assinaturaDadosServidor='';
+let ultimoPongWS=0;
+let vigiaConexaoWSTimer=null;
+
+// No tablet, redesenhar a lista durante um toque pode mover o botão sob o dedo.
+// Atualizações recebidas de outros dispositivos esperam o fim do toque.
+let toqueEmAndamento=false;
+let renderPendenteAposToque=false;
+let fimDoToqueTimer=null;
+
+function assinaturaDados(d){
+  return JSON.stringify({
+    chamados:d.chamados||[],horarios:d.horarios||{},historico:d.historico||[],
+    statusAlunos:d.statusAlunos||{},alunos:d.alunos||[],salas:d.salas||[],
+    diario:d.diario||{},salasFechadas:d.salasFechadas||{}
+  });
+}
+
+function atualizarTelasSemInterromperToque(){
+  if(toqueEmAndamento){
+    renderPendenteAposToque=true;
+    return;
+  }
+  atualizarTelasTempoReal();
+}
+
+function iniciarProtecaoDeToque(){
+  document.addEventListener('pointerdown',function(event){
+    if(event.isPrimary===false)return;
+    clearTimeout(fimDoToqueTimer);
+    toqueEmAndamento=true;
+  },true);
+  const concluirToque=()=>{
+    clearTimeout(fimDoToqueTimer);
+    // Deixa o click que conclui o toque usar o elemento original antes de renderizar.
+    fimDoToqueTimer=setTimeout(()=>{
+      toqueEmAndamento=false;
+      if(renderPendenteAposToque){
+        renderPendenteAposToque=false;
+        atualizarTelasTempoReal();
+      }
+    },180);
+  };
+  document.addEventListener('pointerup',concluirToque,true);
+  document.addEventListener('pointercancel',concluirToque,true);
+}
+
+function iniciarVigiaConexaoWS(){
+  if(vigiaConexaoWSTimer)return;
+  vigiaConexaoWSTimer=setInterval(()=>{
+    if(wsConectado&&ultimoPongWS&&Date.now()-ultimoPongWS>22000){
+      try{ws.close();}catch(e){}
+    }
+  },5000);
+  window.addEventListener('online',()=>{
+    if(!wsConectado){
+      clearTimeout(wsReconectTimer);
+      conectarWS();
+    }
+  });
+}
 
 function perfilAtualWS(){
   return perfilLogado || (salaPermitida ? 'tablet' : 'admin');
@@ -2087,6 +2148,7 @@ function conectarWS(){
 
   ws.onopen=()=>{
     wsConectado=true;
+    ultimoPongWS=Date.now();
     clearTimeout(wsReconectTimer);
     // Registra este cliente na sala (ou secretaria)
     const sala=salaAtualWS();
@@ -2126,6 +2188,8 @@ function wsSend(msg){
 // ══════════════════════════════════════════════════════
 function aplicarSnapshotServidor(d){
   if(!d) return;
+  const assinatura=assinaturaDados(d);
+  if(assinatura===assinaturaDadosServidor)return;
   const salasFechadasAntes={...salasFechadas};
   chamados=new Set(d.chamados||[]);
   horarios=d.horarios||{};
@@ -2135,6 +2199,7 @@ function aplicarSnapshotServidor(d){
   if(d.salas&&d.salas.length) salas=d.salas;
   if(d.diario) _diarioEntradas=d.diario;
   if(d.salasFechadas) salasFechadas=d.salasFechadas;
+  assinaturaDadosServidor=assinatura;
   avisarMudancaFechamentoTablet(salasFechadasAntes,salasFechadas);
   atualizarTelasTempoReal();
   reenfileirarChamadosPendentes();
@@ -2165,9 +2230,11 @@ async function atualizarDoServidorAgora(){
   if(Date.now()-ultimaGravacaoLocal<900) return;
   atualizacaoServidorAtiva=true;
   try{
-    await carregar();
-    atualizarTelasTempoReal();
-    reenfileirarChamadosPendentes();
+    const houveMudanca=await carregar();
+    if(houveMudanca){
+      atualizarTelasSemInterromperToque();
+      reenfileirarChamadosPendentes();
+    }
   }catch(e){
   }finally{
     atualizacaoServidorAtiva=false;
@@ -2270,6 +2337,7 @@ function processarMensagemWS(msg){
     return;
   }
   if(msg.tipo==='pong_back'){
+    ultimoPongWS=Date.now();
     return;
   }
   if(msg.tipo==='reload'){
@@ -2297,7 +2365,7 @@ function processarMensagemWS(msg){
   if(msg.tipo==='reabrir_sala'){
     if(aplicarReaberturaSala(msg.sala)){
       if(salaSelecionada===msg.sala || salaPermitida===msg.sala) salaSelecionada=msg.sala;
-      atualizarTelasTempoReal();
+      atualizarTelasSemInterromperToque();
       mostrarToast(`✅ ${msg.sala} reaberta em outro dispositivo.`);
     }else{
       agendarAtualizacaoServidor();
@@ -2336,7 +2404,7 @@ function processarMensagemWS(msg){
         if(!existe) historico.push(h);
       });
     }
-    atualizarTelasTempoReal();
+    atualizarTelasSemInterromperToque();
     return;
   }
 
@@ -2362,7 +2430,7 @@ function processarMensagemWS(msg){
     if(!entryExist){
       historico.push({nome:msg.nome,emoji:msg.emoji,tipo:tipoHist,hora:msg.hora,data:msg.data||hoje(),sala:msg.salaOrigem||msg.sala,obs:msg.obs||(msg.salaOrigem&&msg.salaOrigem!==msg.sala?`Chamado no acolhimento: ${msg.sala}`:'')});
     }
-    atualizarTelasTempoReal();
+    atualizarTelasSemInterromperToque();
     return;
   }
 
@@ -2381,7 +2449,7 @@ function processarMensagemWS(msg){
     if(msg.histEntry&&!historico.find(function(h){return h.nome===msg.nome&&h.hora===msg.histEntry.hora&&h.data===msg.histEntry.data;})){
       historico.push(msg.histEntry);
     }
-    atualizarTelasTempoReal();
+    atualizarTelasSemInterromperToque();
     return;
   }
 
@@ -2400,7 +2468,7 @@ function processarMensagemWS(msg){
       historico.push(msg.histEntry);
     }
     salvar();
-    atualizarTelasTempoReal();
+    atualizarTelasSemInterromperToque();
     return;
   }
 
@@ -2475,7 +2543,7 @@ function processarMensagemWS(msg){
   if(msg.tipo==='limpar_sala'){
     const nomeSala=msg.sala;
     limparChamadasLocais(nomeSala);
-    atualizarTelasTempoReal();
+    atualizarTelasSemInterromperToque();
     mostrarToast('🗑 Chamada de '+nomeSala+' foi limpa por outro admin.');
     return;
   }
@@ -2483,7 +2551,7 @@ function processarMensagemWS(msg){
   // ── EVENTO: LIMPAR CHAMADA DE TODAS AS SALAS ──
   if(msg.tipo==='limpar_chamada_tudo'){
     limparChamadasLocais();
-    atualizarTelasTempoReal();
+    atualizarTelasSemInterromperToque();
     mostrarToast('🗑 Chamada de todas as salas foi limpa por outro admin.');
     return;
   }
@@ -2492,7 +2560,7 @@ function processarMensagemWS(msg){
   if(msg.tipo==='limpar_historico'){
     historico=[];
     limparChamadasLocais();
-    atualizarTelasTempoReal();
+    atualizarTelasSemInterromperToque();
     mostrarToast('🗑 Histórico e chamadas limpos por outro dispositivo.');
     return;
   }
@@ -2502,7 +2570,7 @@ function processarMensagemWS(msg){
     const nomeSala=msg.sala;
     historico=historico.filter(function(h){return h.sala!==nomeSala;});
     limparChamadasLocais(nomeSala);
-    atualizarTelasTempoReal();
+    atualizarTelasSemInterromperToque();
     mostrarToast('🗑 Histórico e chamada de '+nomeSala+' foram limpos por outro dispositivo.');
     return;
   }
@@ -2704,6 +2772,8 @@ function atualizarBadgeWS(online){
 function iniciarBroadcastListener(){
   conectarWS();
   iniciarAtualizacaoAutomatica();
+  iniciarProtecaoDeToque();
+  iniciarVigiaConexaoWS();
 }
 
 // ══════════════════
@@ -4759,6 +4829,9 @@ async function salvar(){
     diario:_diarioEntradas,
     salasFechadas
   };
+  // A tela já foi atualizada pela própria ação local; evita redesenhá-la de novo
+  // quando a sondagem receber exatamente o mesmo estado do servidor.
+  assinaturaDadosServidor=assinaturaDados(payload);
   if(IS_SERVER){
     try{
       await fetch('/api/dados',{
@@ -4788,6 +4861,8 @@ async function carregar(){
       const res=await fetch('/api/dados');
       if(res.ok){
         const d=await res.json();
+        const assinatura=assinaturaDados(d);
+        if(assinatura===assinaturaDadosServidor)return false;
         chamados=new Set(d.chamados||[]);
         horarios=d.horarios||{};
         historico=d.historico||[];
@@ -4796,7 +4871,8 @@ async function carregar(){
         if(d.salas&&d.salas.length)salas=d.salas;
         if(d.diario)_diarioEntradas=d.diario;
         if(d.salasFechadas)salasFechadas=d.salasFechadas;
-        return;
+        assinaturaDadosServidor=assinatura;
+        return true;
       }
     }catch(e){}
   }
@@ -4819,7 +4895,8 @@ async function carregar(){
     if(ss)salas=ss;
     const sf=JSON.parse(localStorage.getItem('if_salas_fechadas')||'null');
     if(sf)salasFechadas=sf;
-  }catch(e){chamados=new Set();horarios={};historico=[];}
+    return true;
+  }catch(e){chamados=new Set();horarios={};historico=[];return true;}
 }
 
 // ══════════════════
@@ -5023,7 +5100,7 @@ if ('serviceWorker' in navigator) {
     location.reload();
   });
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js?v=32',{updateViaCache:'none'})
+    navigator.serviceWorker.register('/sw.js?v=18',{updateViaCache:'none'})
       .then(reg => console.log('[PWA] SW registrado:', reg.scope))
       .catch(err => console.warn('[PWA] SW falhou:', err));
   });
@@ -5081,6 +5158,7 @@ if ('serviceWorker' in navigator) {
 
       ws.onopen = () => {
         wsConectado = true;
+        ultimoPongWS=Date.now();
         _delay = 1000; // reset do delay ao conectar com sucesso
         clearTimeout(wsReconectTimer);
         const sala = salaAtualWS();
